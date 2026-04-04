@@ -51,10 +51,18 @@ const getBookingOptionsSchema = z.object({
 });
 
 const makeReservationSchema = z.object({
-    slot_token: z.string().min(1).describe('Slot config token (rgs://...) from availability check'),
+    slot_token: z.string().min(1).describe('Slot token from availability check (rgs://... for Resy, slotHash for OpenTable)'),
     date: z.string().describe('Date in YYYY-MM-DD format'),
     party_size: z.number().int().min(1).max(20).default(2).describe('Number of guests'),
-    payment_method_id: z.number().optional().describe('Optional payment method ID'),
+    payment_method_id: z.number().optional().describe('Optional payment method ID (Resy only)'),
+    platform: z.enum(['resy', 'opentable']).default('resy').describe('Which platform to book on'),
+    restaurant_id: z.string().optional().describe('Restaurant ID (required for OpenTable, e.g. opentable-1062610)'),
+    slot_availability_token: z.string().optional().describe('Slot availability token (OpenTable only, from availability check)'),
+});
+
+const setOpenTableCookieSchema = z.object({
+    auth_cookie: z.string().min(1).describe('The authCke cookie value from OpenTable login'),
+    phone: z.string().optional().describe('Phone number used for OT login (for re-auth reference)'),
 });
 
 const cancelReservationSchema = z.object({
@@ -117,9 +125,24 @@ function registerTools(server) {
             return { content: [{ type: 'text', text: JSON.stringify({ error: error instanceof Error ? error.message : 'Failed to get booking options' }, null, 2) }] };
         }
     });
-    server.tool('make_reservation', 'Book a reservation. Provide the slot_token from check_availability. Handles the full flow: gets book token from /3/details, then books via /3/book.', makeReservationSchema.shape, async (args) => {
+    server.tool('make_reservation', 'Book a reservation. Provide the slot_token from check_availability. For Resy: handles book token flow automatically. For OpenTable: requires platform="opentable", restaurant_id, and slot_availability_token.', makeReservationSchema.shape, async (args) => {
         const input = makeReservationSchema.parse(args);
         try {
+            // OpenTable booking
+            if (input.platform === 'opentable') {
+                const { openTableClient } = await import('./platforms/opentable.js');
+                const result = await openTableClient.makeReservation({
+                    restaurantId: input.restaurant_id || 'opentable-0',
+                    platform: 'opentable',
+                    slotId: input.slot_token,
+                    date: input.date,
+                    partySize: input.party_size,
+                    token: input.slot_availability_token || input.slot_token,
+                });
+                return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+            }
+
+            // Resy booking (default)
             // Step 1: Get book token from /3/details using the slot config token
             const tokenResult = await resyClient.getBookToken(input.slot_token, input.date, input.party_size);
 
@@ -144,7 +167,7 @@ function registerTools(server) {
             };
             return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (error) {
-            const result = { success: false, platform: 'resy', error: error instanceof Error ? error.message : 'Booking failed' };
+            const result = { success: false, platform: input.platform, error: error instanceof Error ? error.message : 'Booking failed' };
             return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
     });
@@ -214,6 +237,14 @@ function registerTools(server) {
             }
         }
         return { content: [{ type: 'text', text: 'Only Resy token refresh is supported.' }] };
+    });
+    server.tool('set_opentable_cookie', 'Store OpenTable auth cookie obtained via browser login.', setOpenTableCookieSchema.shape, async (args) => {
+        const input = setOpenTableCookieSchema.parse(args);
+        await setCredential('opentable-auth-cookie', input.auth_cookie);
+        if (input.phone) {
+            await setCredential('opentable-phone', input.phone);
+        }
+        return { content: [{ type: 'text', text: 'OpenTable auth cookie stored. Booking is now available.' }] };
     });
     server.tool('snipe_reservation', 'Schedule an automatic booking attempt.', snipeReservationSchema.shape, async (args) => {
         const input = snipeReservationSchema.parse(args);
