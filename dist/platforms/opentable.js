@@ -137,8 +137,15 @@ export class OpenTablePlatformClient extends BasePlatformClient {
 
         let response = await doFetch();
 
-        // Akamai may challenge the first request from a cold TLS session; retry once on 403
+        // Akamai may challenge requests with a 403; retry with a brief pause
         if (response.status === 403) {
+            console.error(`OpenTable ${operationName}: got 403, retrying after 500ms...`);
+            await new Promise(r => setTimeout(r, 500));
+            response = await doFetch();
+        }
+        if (response.status === 403) {
+            console.error(`OpenTable ${operationName}: got 403 again on retry, trying once more after 1s...`);
+            await new Promise(r => setTimeout(r, 1000));
             response = await doFetch();
         }
 
