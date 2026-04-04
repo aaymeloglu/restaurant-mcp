@@ -18,7 +18,9 @@ export type CredentialKey =
   | 'resy-auth-token'
   | 'resy-email'
   | 'resy-password'
-  | 'opentable-token';
+  | 'opentable-token'
+  | 'opentable-auth-cookie'
+  | 'opentable-phone';
 
 interface CredentialStore {
   [key: string]: string;

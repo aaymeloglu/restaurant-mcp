@@ -45,6 +45,8 @@ const ENV_VAR_MAP = {
     'resy-email': 'RESY_EMAIL',
     'resy-password': 'RESY_PASSWORD',
     'opentable-token': 'OPENTABLE_TOKEN',
+    'opentable-auth-cookie': 'OPENTABLE_AUTH_COOKIE',
+    'opentable-phone': 'OPENTABLE_PHONE',
 };
 export async function getCredential(key) {
     // First check environment variables (for cloud deployments)
@@ -105,11 +107,15 @@ export async function getResyAuthStatus() {
     };
 }
 export async function getOpenTableAuthStatus() {
-    const token = await getCredential('opentable-token');
+    const [authCookie, phone] = await Promise.all([
+        getCredential('opentable-auth-cookie'),
+        getCredential('opentable-phone'),
+    ]);
     return {
         platform: 'opentable',
         hasApiKey: false,
-        hasAuthToken: !!token,
-        hasLogin: false,
+        hasAuthToken: !!authCookie,
+        hasLogin: !!phone,
+        phone: phone ? maskCredential(phone) : undefined,
     };
 }
