@@ -1,77 +1,88 @@
 # Restaurant Reservation MCP Server
 
-A local MCP server for searching and booking restaurant reservations through Resy and OpenTable.
+A stdio MCP server for searching and booking restaurant reservations. Currently supports Resy with full booking; OpenTable and Tock are stubbed (no public APIs).
 
-## Features
-
-- **Unified Search**: Search both Resy and OpenTable with a single query
-- **Real-time Availability**: Check available time slots for any date
-- **Direct Booking**: Book Resy reservations directly; get booking links for OpenTable
-- **Reservation Sniper**: Auto-book the instant slots become available
-- **Secure Credentials**: All credentials stored in Windows Credential Manager (encrypted with DPAPI)
-
-## Installation
+## Setup
 
 ```bash
-cd C:\Users\jrkle\Desktop\restaurant-mcp
+git clone git@github.com:aaymeloglu/restaurant-mcp.git
+cd restaurant-mcp
 npm install
-npm run build
 ```
 
-## Configure Claude Code
-
-Add to `~/.claude/settings.json`:
+Add to your project's `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "restaurant-reservations": {
+      "type": "stdio",
       "command": "node",
-      "args": ["C:\\Users\\jrkle\\Desktop\\restaurant-mcp\\dist\\index.js"]
+      "args": ["/Users/you/git/restaurant-mcp/dist/index.js"],
+      "env": {
+        "API_KEY": "<resy-api-key>",
+        "RESY_AUTH_TOKEN": "<resy-auth-token>",
+        "RESY_EMAIL": "<resy-email>",
+        "RESY_PASSWORD": "<resy-password>"
+      }
     }
   }
 }
 ```
 
-## Getting Started
+## Getting Resy Credentials
 
-### 1. Set Up Resy Credentials
+You need an API key and auth token from resy.com. Open browser dev tools while logged in:
 
-First, you need your Resy API key and auth token. You can find these in your browser's developer tools while logged into resy.com:
+```js
+// API key (from Angular config)
+angular.element(document.body).injector().get('Config').apiKey
 
-```
-# In Claude, use these tools:
-set_credentials(platform: "resy", api_key: "YOUR_API_KEY", auth_token: "YOUR_TOKEN")
-
-# Or for automatic token refresh, use:
-set_login(platform: "resy", email: "your@email.com", password: "your-password")
+// Auth token (from Redux store)
+angular.element(document.body).injector().get('$rootScope').reduxStore.getState().authToken.token
 ```
 
-### 2. Search for Restaurants
+Or use the `set_login` tool with your email/password to enable automatic token refresh.
+
+## Booking Flow
+
+### 1. Search
 
 ```
-search_restaurants(query: "Carbone", location: "New York", party_size: 2)
+search_restaurants(name: "Odd Duck", location: "Austin", date: "2026-04-04", party_size: 2)
 ```
 
-**You don't need to know which platform a restaurant uses!** The search automatically checks both Resy and OpenTable in parallel. Each result includes a `platform` field (`resy` or `opentable`) and an ID like `resy-12345` or `opentable-67890` - just use these directly with `check_availability` and `make_reservation`.
+Returns restaurants with IDs like `resy-136`. The search queries Resy's `/4/find` endpoint and returns all matching venues with availability.
 
-### 3. Check Availability
+### 2. Check Availability
 
 ```
-check_availability(restaurant_id: "resy-12345", platform: "resy", date: "2025-02-15", party_size: 2)
+check_availability(restaurant_id: "resy-136", date: "2026-04-04", party_size: 2)
 ```
 
-### 4. Book a Reservation
+Returns time slots, each with a `token` field (the `rgs://` config token needed for booking).
+
+### 3. Book
 
 ```
 make_reservation(
-  restaurant_id: "resy-12345",
-  platform: "resy",
-  slot_id: "123456",
-  party_size: 2,
-  date: "2025-02-15"
+  slot_token: "rgs://resy/136/2973287/2/2026-04-04/2026-04-04/17:30:00/2/Dining Room",
+  date: "2026-04-04",
+  party_size: 2
 )
 ```
+
+This handles the full flow: calls `/3/details` to get the book token, then `/3/book` to confirm.
+
+You can also call `get_booking_options` with the same `slot_token` to preview the book token and payment methods before committing.
+
+## One-Shot Booking
+
+```
+find_table(restaurant: "Odd Duck", location: "Austin", date: "2026-04-04", time: "6pm", party_size: 2, book: true)
+```
+
+Searches, checks availability, and books the best matching slot in one call.
 
 ## Reservation Sniper
 
@@ -79,71 +90,57 @@ For popular restaurants that release reservations at specific times:
 
 ```
 snipe_reservation(
-  restaurant_id: "resy-12345",
-  platform: "resy",
-  date: "2025-02-15",
+  restaurant_id: "resy-136",
+  date: "2026-04-04",
   party_size: 2,
-  preferred_times: ["7:00 PM", "7:30 PM", "8:00 PM"],
-  release_time: "2025-02-01T09:00:00"
+  preferred_times: ["7:00 PM", "7:30 PM"],
+  release_time: "2026-03-21T09:00:00"
 )
 ```
 
-The sniper will:
-1. Start polling 30 seconds before release time
-2. Poll every 500ms once release time hits
-3. Instantly book the first matching slot
-4. Return confirmation or error
+Polls every 500ms at release time and books the first matching slot.
 
-## Available Tools
+## All Tools
 
 | Tool | Description |
 |------|-------------|
-| `search_restaurants` | Search restaurants by name/location on Resy and/or OpenTable |
-| `check_availability` | Get available time slots for a restaurant |
-| `make_reservation` | Book a reservation |
-| `list_reservations` | View your upcoming reservations |
-| `cancel_reservation` | Cancel a booking |
-| `set_credentials` | Store API key/token securely |
+| `find_table` | One-shot: search, check availability, and book |
+| `search_restaurants` | Search by name/location across platforms |
+| `check_availability` | Get available time slots |
+| `get_booking_options` | Get book token and payment methods for a slot |
+| `make_reservation` | Book using a slot token from availability check |
+| `list_reservations` | View upcoming Resy reservations |
+| `cancel_reservation` | Cancel a Resy booking |
+| `set_credentials` | Store API key/token |
 | `set_login` | Store email/password for auto-refresh |
-| `check_auth_status` | Verify credentials are valid |
+| `check_auth_status` | Verify credentials |
 | `refresh_token` | Manually refresh auth token |
-| `snipe_reservation` | Schedule auto-booking when slots open |
+| `get_platform_status` | Check platform health and rate limits |
+| `snipe_reservation` | Schedule auto-booking |
 | `list_snipes` | View scheduled snipes |
 | `cancel_snipe` | Cancel a scheduled snipe |
 
+## Architecture
+
+- `dist/index.js` -- Single entry point (stdio transport). Hand-maintained, not compiled.
+- `dist/platforms/resy.js` -- Resy client (search, availability, booking via unofficial API)
+- `dist/platforms/opentable.js` -- Stub (OpenTable shut down their public API)
+- `dist/platforms/tock.js` -- Stub (Tock has no public API)
+- `src/` -- TypeScript source (reference; not auto-compiled to dist)
+
+## Token Refresh
+
+The Resy auth token expires roughly every 45 days. If `RESY_EMAIL` and `RESY_PASSWORD` are set, the server auto-refreshes on 401/419 errors. You can also manually refresh with `refresh_token`.
+
 ## Security
 
-- **No credit card data**: This MCP never handles payment info. Bookings use payment methods saved in your Resy/OpenTable accounts.
-- **Windows Credential Manager**: All credentials encrypted with DPAPI (same security as Chrome/Edge passwords)
-- **No files**: Credentials never written to disk files
-- **HTTPS only**: All API calls use TLS 1.3
-- **Rate limited**: Max 10 requests/minute per platform
-
-## Platform Notes
-
-### Resy
-- Full booking support via unofficial API
-- Automatic token refresh when expired
-- Can view and cancel reservations
-
-### OpenTable
-- Search and availability work without auth
-- **Cannot complete booking via API** - returns a URL to finish on OpenTable's website
-- Reservation listing not available
-
-## Troubleshooting
-
-### "Resy API key not configured"
-Run `set_credentials` with your API key first.
-
-### "Resy authentication failed"
-Your token expired. Run `set_login` to enable auto-refresh, or manually get a new token.
-
-### OpenTable booking returns URL
-This is expected. OpenTable doesn't allow third-party booking - click the URL to complete on their site.
+- No credit card data handled; bookings use payment methods saved in your Resy account
+- Credentials encrypted at rest via `~/.restaurant-mcp/credentials.enc` (AES-256-GCM)
+- Environment variables take precedence over stored credentials
+- HTTPS only, rate-limited (20 req/min for Resy)
 
 ## Limitations
 
-- Uses unofficial APIs that could change
-- OpenTable requires manual booking completion
+- Uses unofficial Resy API (could change)
+- OpenTable and Tock have no usable public APIs; search/booking requires browser automation
 - For personal use only
