@@ -384,9 +384,10 @@ export class ResyPlatformClient extends BasePlatformClient {
 
   async makeReservation(params: ReservationParams): Promise<ReservationResult> {
     try {
-      // Get booking details (includes book token and payment methods)
+      // /3/details requires the config token string (rgs://...), not the numeric config ID
+      const configId = params.token || params.slotId;
       const details = await this.request<ResyBookDetailsResponse>('get', '/3/details', {
-        config_id: params.slotId,
+        config_id: configId,
         day: params.date,
         party_size: params.partySize,
       });
@@ -457,6 +458,33 @@ export class ResyPlatformClient extends BasePlatformClient {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Get book token and payment methods for a slot.
+   * @param configToken The rgs:// config token string from a slot
+   * @param date Date in YYYY-MM-DD format
+   * @param partySize Number of guests
+   */
+  async getBookToken(configToken: string, date: string, partySize: number): Promise<{
+    bookToken: string;
+    expires: string;
+    paymentMethods: Array<{ id: number; isDefault: boolean }>;
+  }> {
+    const details = await this.request<ResyBookDetailsResponse>('get', '/3/details', {
+      config_id: configToken,
+      day: date,
+      party_size: partySize,
+    });
+
+    return {
+      bookToken: details.book_token.value,
+      expires: details.book_token.date_expires,
+      paymentMethods: (details.user.payment_methods || []).map((p) => ({
+        id: p.id,
+        isDefault: p.is_default,
+      })),
+    };
   }
 
   // Login method for credential management

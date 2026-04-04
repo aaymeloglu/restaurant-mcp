@@ -2,3 +2,4 @@ node_modules/
 *.log
 .env
 credentials.enc
+.DS_Store

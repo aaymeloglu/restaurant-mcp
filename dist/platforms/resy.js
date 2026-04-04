@@ -280,9 +280,10 @@ export class ResyPlatformClient extends BasePlatformClient {
     }
     async makeReservation(params) {
         try {
-            // Get booking details (includes book token and payment methods)
+            // /3/details requires the config token string (rgs://...), not the numeric config ID
+            const configId = params.token || params.slotId;
             const details = await this.request('get', '/3/details', {
-                config_id: params.slotId,
+                config_id: configId,
                 day: params.date,
                 party_size: params.partySize,
             });
@@ -312,6 +313,21 @@ export class ResyPlatformClient extends BasePlatformClient {
                 error: error instanceof Error ? error.message : 'Failed to make reservation',
             };
         }
+    }
+    async getBookToken(configToken, date, partySize) {
+        const details = await this.request('get', '/3/details', {
+            config_id: configToken,
+            day: date,
+            party_size: partySize,
+        });
+        return {
+            bookToken: details.book_token.value,
+            expires: details.book_token.date_expires,
+            paymentMethods: (details.user.payment_methods || []).map((p) => ({
+                id: p.id,
+                isDefault: p.is_default,
+            })),
+        };
     }
     async isAvailable() {
         // Check cache
