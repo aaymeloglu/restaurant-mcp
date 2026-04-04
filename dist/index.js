@@ -60,9 +60,11 @@ const makeReservationSchema = z.object({
     slot_availability_token: z.string().optional().describe('Slot availability token (OpenTable only, from availability check)'),
 });
 
-const setOpenTableCookieSchema = z.object({
-    auth_cookie: z.string().min(1).describe('The authCke cookie value from OpenTable login'),
-    phone: z.string().optional().describe('Phone number used for OT login (for re-auth reference)'),
+const setOpenTableSessionSchema = z.object({
+    cookies: z.string().min(1).describe('Full cookie string from browser (document.cookie) after loading opentable.com'),
+    csrf_token: z.string().min(1).describe('CSRF token from window.__CSRF_TOKEN__ on opentable.com'),
+    hashes: z.record(z.string()).optional().describe('Optional updated persisted query hashes (e.g. {"Autocomplete": "abc...", "RestaurantsAvailability": "def..."})'),
+    auth_cookie: z.string().optional().describe('authCke cookie value from OpenTable login (for booking, not needed for search/availability)'),
 });
 
 const cancelReservationSchema = z.object({
@@ -238,13 +240,16 @@ function registerTools(server) {
         }
         return { content: [{ type: 'text', text: 'Only Resy token refresh is supported.' }] };
     });
-    server.tool('set_opentable_cookie', 'Store OpenTable auth cookie obtained via browser login.', setOpenTableCookieSchema.shape, async (args) => {
-        const input = setOpenTableCookieSchema.parse(args);
-        await setCredential('opentable-auth-cookie', input.auth_cookie);
-        if (input.phone) {
-            await setCredential('opentable-phone', input.phone);
-        }
-        return { content: [{ type: 'text', text: 'OpenTable auth cookie stored. Booking is now available.' }] };
+    server.tool('set_opentable_session', 'Inject OpenTable browser session (cookies + CSRF token) for API access. Requires loading opentable.com in Playwright first to solve Akamai bot challenge.', setOpenTableSessionSchema.shape, async (args) => {
+        const input = setOpenTableSessionSchema.parse(args);
+        const { openTableClient } = await import('./platforms/opentable.js');
+        await openTableClient.setSession(input.cookies, input.csrf_token, input.hashes || null, input.auth_cookie || null);
+        // Invalidate health cache so isAvailable() picks up the new session
+        cache.invalidate('health:opentable');
+        const parts = ['OpenTable session stored. Search and availability are now active.'];
+        if (input.auth_cookie) parts.push('Auth cookie included -- booking is also available.');
+        if (input.hashes) parts.push(`Updated ${Object.keys(input.hashes).length} persisted query hash(es).`);
+        return { content: [{ type: 'text', text: parts.join(' ') }] };
     });
     server.tool('snipe_reservation', 'Schedule an automatic booking attempt.', snipeReservationSchema.shape, async (args) => {
         const input = snipeReservationSchema.parse(args);

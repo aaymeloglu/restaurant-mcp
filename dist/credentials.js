@@ -47,6 +47,9 @@ const ENV_VAR_MAP = {
     'opentable-token': 'OPENTABLE_TOKEN',
     'opentable-auth-cookie': 'OPENTABLE_AUTH_COOKIE',
     'opentable-phone': 'OPENTABLE_PHONE',
+    'opentable-cookies': 'OPENTABLE_COOKIES',
+    'opentable-csrf': 'OPENTABLE_CSRF',
+    'opentable-hashes': 'OPENTABLE_HASHES',
 };
 export async function getCredential(key) {
     // First check environment variables (for cloud deployments)

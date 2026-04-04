@@ -1,17 +1,16 @@
-import axios from 'axios';
+import { Impit, Browser } from 'impit';
 import { BasePlatformClient, createRestaurantId } from './base.js';
-import { getCredential } from '../credentials.js';
+import { getCredential, setCredential } from '../credentials.js';
 import { cache, CacheKeys, CacheTTL } from '../services/cache.js';
 import { rateLimiter } from '../services/rate-limiter.js';
-import { randomUUID } from 'crypto';
 
 const GQL_URL = 'https://www.opentable.com/dapi/fe/gql';
 const BOOKING_URL = 'https://www.opentable.com/dapi/booking/make-reservation';
 
-// Persisted query hashes -- these change when OT deploys new frontend builds
-const QUERY_HASHES = {
-    Autocomplete: '3cabca79abcb0db395d3cbebb4d47d41f3ddd69442eba3a57f76b943cceb8cf4',
-    RestaurantsAvailability: '55b189ad974cc410bc3c3806dfba757011866babcb67a9a8a9c86464b46e587c',
+// Default persisted query hashes -- updated via set_opentable_session when stale
+const DEFAULT_HASHES = {
+    Autocomplete: 'fe1d118abd4c227750693027c2414d43014c2493f64f49bcef5a65274ce9c3c3',
+    RestaurantsAvailability: 'b2d05a06151b3cb21d9dfce4f021303eeba288fac347068b29c1cb66badc46af',
 };
 
 // City coordinates for search
@@ -34,7 +33,6 @@ function getCityCoords(location) {
     for (const [city, coords] of Object.entries(CITY_COORDS)) {
         if (lower.includes(city)) return coords;
     }
-    // Default to Austin
     return { lat: 30.2672, lng: -97.7431 };
 }
 
@@ -42,53 +40,123 @@ export class OpenTablePlatformClient extends BasePlatformClient {
     name = 'opentable';
     client;
 
+    // In-memory session state (loaded from credentials on first use)
+    _session = null;
+
     constructor() {
         super();
-        this.client = axios.create({
-            baseURL: GQL_URL,
-            timeout: 15000,
-        });
+        this.client = new Impit({ browser: Browser.Chrome });
     }
 
-    getHeaders() {
+    /**
+     * Load session from stored credentials. Session includes:
+     * - cookies: full cookie string for OT requests
+     * - csrfToken: x-csrf-token from OT page
+     * - hashes: persisted query hashes (optional override)
+     * - authCookie: authCke value for booking (optional, separate from session cookies)
+     */
+    async getSession() {
+        if (this._session) return this._session;
+
+        const [cookies, csrfToken, hashesJson, authCookie] = await Promise.all([
+            getCredential('opentable-cookies'),
+            getCredential('opentable-csrf'),
+            getCredential('opentable-hashes'),
+            getCredential('opentable-auth-cookie'),
+        ]);
+
+        if (!cookies || !csrfToken) return null;
+
+        let hashes = { ...DEFAULT_HASHES };
+        if (hashesJson) {
+            try { hashes = { ...hashes, ...JSON.parse(hashesJson) }; } catch {}
+        }
+
+        this._session = { cookies, csrfToken, hashes, authCookie };
+        return this._session;
+    }
+
+    /**
+     * Store a new session. Called by the set_opentable_session tool.
+     */
+    async setSession(cookies, csrfToken, hashes, authCookie) {
+        await setCredential('opentable-cookies', cookies);
+        await setCredential('opentable-csrf', csrfToken);
+        if (hashes) {
+            await setCredential('opentable-hashes', JSON.stringify(hashes));
+        }
+        if (authCookie) {
+            await setCredential('opentable-auth-cookie', authCookie);
+        }
+        this._session = {
+            cookies,
+            csrfToken,
+            hashes: { ...DEFAULT_HASHES, ...(hashes || {}) },
+            authCookie: authCookie || this._session?.authCookie || null,
+        };
+    }
+
+    getHeaders(session) {
         return {
             'Content-Type': 'application/json',
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
             'Origin': 'https://www.opentable.com',
             'Referer': 'https://www.opentable.com/',
-            'x-csrf-token': randomUUID(),
+            'x-csrf-token': session.csrfToken,
+            'Cookie': session.cookies,
         };
     }
 
     async gql(operationName, variables) {
+        const session = await this.getSession();
+        if (!session) {
+            throw new Error('OpenTable session not initialized. Use set_opentable_session to inject browser cookies and CSRF token first.');
+        }
+
         if (!await rateLimiter.acquire(this.name)) {
             throw new Error('Rate limited. Please try again later.');
         }
 
-        const hash = QUERY_HASHES[operationName];
+        const hash = session.hashes[operationName];
         if (!hash) throw new Error(`Unknown operation: ${operationName}`);
 
-        const response = await this.client.post(
-            `?optype=query&opname=${operationName}`,
+        const doFetch = () => this.client.fetch(
+            `${GQL_URL}?optype=query&opname=${operationName}`,
             {
-                operationName,
-                variables,
-                extensions: {
-                    persistedQuery: { version: 1, sha256Hash: hash },
-                },
-            },
-            { headers: this.getHeaders() }
+                method: 'POST',
+                headers: this.getHeaders(session),
+                body: JSON.stringify({
+                    operationName,
+                    variables,
+                    extensions: {
+                        persistedQuery: { version: 1, sha256Hash: hash },
+                    },
+                }),
+            }
         );
 
-        if (response.data?.errors?.length > 0) {
-            const err = response.data.errors[0];
+        let response = await doFetch();
+
+        // Akamai may challenge the first request from a cold TLS session; retry once on 403
+        if (response.status === 403) {
+            response = await doFetch();
+        }
+
+        if (!response.ok) {
+            throw new Error(`OpenTable API returned ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data?.errors?.length > 0) {
+            const err = data.errors[0];
             if (err.message?.includes('PersistedQueryNotFound')) {
-                throw new Error(`OpenTable persisted query hash expired for ${operationName}. Hashes need updating.`);
+                throw new Error(`OpenTable persisted query hash expired for ${operationName}. Re-run set_opentable_session with fresh hashes.`);
             }
             throw new Error(`OpenTable GraphQL error: ${err.message}`);
         }
 
-        return response.data;
+        return data;
     }
 
     async search(query) {
@@ -102,7 +170,9 @@ export class OpenTablePlatformClient extends BasePlatformClient {
                 covers: query.partySize || 2,
             });
 
-            const restaurants = data?.data?.autocomplete?.restaurants || [];
+            const results = data?.data?.autocomplete?.autocompleteResults || [];
+            // Filter to restaurants only (exclude locations, cuisines, etc.)
+            const restaurants = results.filter((r) => r.type === 'Restaurant');
             return restaurants.map((r) => this.mapToRestaurant(r));
         } catch (error) {
             console.error('OpenTable search error:', error instanceof Error ? error.message : error);
@@ -110,7 +180,7 @@ export class OpenTablePlatformClient extends BasePlatformClient {
         }
     }
 
-    async getAvailability(id, date, partySize) {
+    async getAvailability(id, date, partySize, requestedTime = '19:00') {
         const numericId = typeof id === 'string' ? parseInt(this.extractId(id), 10) : id;
 
         const cacheKey = CacheKeys.availability(this.name, numericId, date, partySize);
@@ -126,7 +196,7 @@ export class OpenTablePlatformClient extends BasePlatformClient {
                 requireTypes: ['Standard', 'Experience'],
                 restaurantIds: [numericId],
                 date,
-                time: '19:00',
+                time: requestedTime,
                 partySize,
                 databaseRegion: 'NA',
             });
@@ -134,14 +204,20 @@ export class OpenTablePlatformClient extends BasePlatformClient {
             const avail = data?.data?.availability?.[0];
             if (!avail?.availabilityDays?.length) return [];
 
+            // Parse base time for offset calculation
+            const [baseH, baseM] = requestedTime.split(':').map(Number);
+            const baseMinutes = baseH * 60 + baseM;
+
             const slots = [];
             for (const day of avail.availabilityDays) {
                 for (const slot of (day.slots || [])) {
                     if (!slot.isAvailable) continue;
+                    const absoluteMinutes = baseMinutes + (slot.timeOffsetMinutes || 0);
+                    const time = this.offsetToTime(absoluteMinutes);
                     slots.push({
-                        slotId: slot.slotHash || `ot-${numericId}-${date}-${slot.time || ''}`,
+                        slotId: slot.slotHash || `ot-${numericId}-${date}-${time}`,
                         platform: this.name,
-                        time: slot.time || this.offsetToTime(slot.timeOffsetMinutes),
+                        time,
                         type: slot.type || 'Standard',
                         token: slot.slotAvailabilityToken || undefined,
                     });
@@ -157,65 +233,69 @@ export class OpenTablePlatformClient extends BasePlatformClient {
     }
 
     async getDetails(id) {
-        // OpenTable GraphQL doesn't have a clean details endpoint
-        // Return minimal details from what we know
         return null;
     }
 
     async makeReservation(params) {
-        const authCookie = await getCredential('opentable-auth-cookie');
-        if (!authCookie) {
+        const session = await this.getSession();
+        if (!session) {
             return {
                 success: false,
                 platform: this.name,
-                error: 'OpenTable auth cookie not set. Please log in to OpenTable first (use Playwright SMS login flow).',
+                error: 'OpenTable session not initialized. Use set_opentable_session first.',
+            };
+        }
+
+        if (!session.authCookie) {
+            return {
+                success: false,
+                platform: this.name,
+                error: 'OpenTable auth cookie not set. Log in to OpenTable via Playwright to get your authCke cookie, then pass it to set_opentable_session.',
             };
         }
 
         const numericId = parseInt(this.extractId(params.restaurantId), 10);
 
         try {
-            const response = await this.client.post(
-                BOOKING_URL,
-                {
+            const headers = this.getHeaders(session);
+            headers['Cookie'] = `${session.cookies}; authCke=${session.authCookie}`;
+
+            const response = await this.client.fetch(BOOKING_URL, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
                     restaurantId: numericId,
                     slotHash: params.slotId,
                     slotAvailabilityToken: params.token,
                     partySize: params.partySize,
                     date: params.date,
-                },
-                {
-                    headers: {
-                        ...this.getHeaders(),
-                        'Cookie': `authCke=${authCookie}`,
-                    },
-                    baseURL: '',
-                }
-            );
+                }),
+            });
 
-            if (response.data?.confirmationNumber) {
+            const responseData = await response.json();
+
+            if (responseData?.confirmationNumber) {
                 cache.invalidate(`availability:${this.name}:*`);
                 return {
                     success: true,
                     platform: this.name,
-                    reservationId: response.data.confirmationNumber,
-                    confirmationDetails: `OpenTable reservation confirmed! Confirmation: ${response.data.confirmationNumber}`,
+                    reservationId: responseData.confirmationNumber,
+                    confirmationDetails: `OpenTable reservation confirmed! Confirmation: ${responseData.confirmationNumber}`,
                 };
             }
 
             return {
                 success: false,
                 platform: this.name,
-                error: response.data?.error || 'Booking failed -- unexpected response',
+                error: responseData?.error || 'Booking failed -- unexpected response',
             };
         } catch (error) {
             const msg = error instanceof Error ? error.message : 'Booking failed';
-            // If 401/403, cookie likely expired
-            if (error?.response?.status === 401 || error?.response?.status === 403) {
+            if (msg.includes('403') || msg.includes('401') || msg.includes('409')) {
                 return {
                     success: false,
                     platform: this.name,
-                    error: 'OpenTable auth cookie expired. Please re-login via Playwright SMS flow.',
+                    error: 'OpenTable session expired. Re-run set_opentable_session with fresh browser cookies.',
                 };
             }
             return { success: false, platform: this.name, error: msg };
@@ -223,50 +303,32 @@ export class OpenTablePlatformClient extends BasePlatformClient {
     }
 
     async isAvailable() {
-        const cacheKey = CacheKeys.health(this.name);
-        const cached = cache.get(cacheKey);
-        if (cached !== null) return cached;
-
-        try {
-            // Light health check: search for a common term
-            await this.gql('Autocomplete', {
-                term: 'test',
-                latitude: 30.2672,
-                longitude: -97.7431,
-                covers: 2,
-            });
-            cache.set(cacheKey, true, CacheTTL.PLATFORM_HEALTH);
-            return true;
-        } catch (error) {
-            console.error('OpenTable isAvailable error:', error instanceof Error ? error.message : error);
-            cache.set(cacheKey, false, CacheTTL.PLATFORM_HEALTH);
-            return false;
-        }
+        // OT requires browser-injected session cookies.
+        // Available = session has been injected.
+        const session = await this.getSession();
+        return session !== null;
     }
 
     async isAuthenticated() {
-        const authCookie = await getCredential('opentable-auth-cookie');
-        return !!authCookie;
+        const session = await this.getSession();
+        return !!session?.authCookie;
     }
 
-    // Helper: map OT autocomplete result to Restaurant interface
     mapToRestaurant(r) {
         return {
-            id: createRestaurantId(this.name, r.restaurantId),
+            id: createRestaurantId(this.name, r.id),
             platform: this.name,
-            platformId: r.restaurantId,
+            platformId: Number(r.id),
             name: r.name,
-            location: r.neighborhood || '',
-            neighborhood: r.neighborhood,
-            cuisine: r.cuisine || '',
-            cuisines: r.cuisine ? [r.cuisine] : [],
-            priceRange: r.priceRange || 0,
-            rating: r.statistics?.reviews?.ratings?.overall?.average || 0,
-            imageUrl: r.primaryPhoto?.url,
+            location: r.metroName || '',
+            neighborhood: r.neighborhoodName || '',
+            cuisine: '',
+            cuisines: [],
+            priceRange: 0,
+            rating: 0,
         };
     }
 
-    // Helper: convert offset minutes from midnight to HH:MM
     offsetToTime(minutes) {
         if (minutes === undefined || minutes === null) return '';
         const h = Math.floor(minutes / 60);
@@ -275,5 +337,4 @@ export class OpenTablePlatformClient extends BasePlatformClient {
     }
 }
 
-// Singleton instance
 export const openTableClient = new OpenTablePlatformClient();
