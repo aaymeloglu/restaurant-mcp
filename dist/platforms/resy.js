@@ -113,11 +113,11 @@ export class ResyPlatformClient extends BasePlatformClient {
                     party_size: partySize,
                     query: query.query,
                 },
-                timeout: 10000,
+                timeout: 30000,
             });
-            const hits = findData.data?.search?.hits || [];
-            console.error(`Resy search found ${hits.length} results`);
-            return hits.map((hit) => this.mapToRestaurant(hit));
+            const venues = findData.data?.results?.venues || [];
+            console.error(`Resy search found ${venues.length} results`);
+            return venues.map((entry) => this.mapToRestaurant(entry.venue));
         }
         catch (error) {
             console.error('Resy search error:', error instanceof Error ? error.message : error);
@@ -321,10 +321,10 @@ export class ResyPlatformClient extends BasePlatformClient {
             return cached;
         try {
             await this.ensureCredentials();
-            // Health check using /4/find which is the working search endpoint
+            // Health check: use a targeted query to avoid downloading the full venue catalog
             const response = await this.client.get('/4/find', {
                 headers: this.getHeaders(),
-                params: { lat: 40.7128, long: -73.9352, day: this.today(), party_size: 2 },
+                params: { lat: 30.2672, long: -97.7431, day: this.today(), party_size: 2, query: 'health_check' },
                 timeout: 10000,
             });
             const available = response.status === 200;
@@ -381,7 +381,6 @@ export class ResyPlatformClient extends BasePlatformClient {
     }
     // Helper methods
     mapToRestaurant(hit) {
-        const cuisines = Array.isArray(hit.cuisine) ? hit.cuisine : [hit.cuisine].filter(Boolean);
         return {
             id: this.createId(hit.id.resy),
             platform: this.name,
@@ -389,11 +388,11 @@ export class ResyPlatformClient extends BasePlatformClient {
             name: hit.name,
             location: hit.location?.name || '',
             neighborhood: hit.location?.neighborhood,
-            cuisine: cuisines.join(', '),
-            cuisines,
+            cuisine: '',
+            cuisines: [],
             priceRange: hit.price_range || 0,
             rating: hit.rating || 0,
-            imageUrl: hit.images?.[0],
+            imageUrl: undefined,
         };
     }
     mapToTimeSlot(slot) {
