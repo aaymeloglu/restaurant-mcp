@@ -302,8 +302,8 @@ export class ResyPlatformClient extends BasePlatformClient {
             return {
                 success: true,
                 platform: this.name,
-                reservationId: String(result.reservation_id),
-                confirmationDetails: `Reservation confirmed! ID: ${result.reservation_id}`,
+                reservationId: result.resy_token,
+                confirmationDetails: `Reservation confirmed! Confirmation #: ${result.reservation_id}`,
             };
         }
         catch (error) {

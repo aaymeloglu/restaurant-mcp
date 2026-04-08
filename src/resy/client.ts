@@ -257,9 +257,11 @@ export class ResyClient {
     interface ReservationsResponse {
       reservations: Array<{
         resy_token: string;
-        venue: { name: string; location: { name: string } };
-        reservation: { day: string; time_slot: string; num_seats: number };
-        status: string;
+        venue: { name: string; location?: { name: string } };
+        day: string;
+        time_slot: string;
+        num_seats: number;
+        status?: string;
       }>;
     }
 
@@ -271,15 +273,15 @@ export class ResyClient {
         name: res.venue.name,
         location: res.venue.location?.name || '',
       },
-      date: res.reservation.day,
-      time: res.reservation.time_slot,
-      partySize: res.reservation.num_seats,
-      status: res.status,
+      date: res.day,
+      time: res.time_slot,
+      partySize: res.num_seats,
+      status: res.status || 'confirmed',
     }));
   }
 
   async cancelReservation(resyToken: string): Promise<void> {
-    await this.request<void>('delete', '/3/book', { resy_token: resyToken });
+    await this.request<void>('post', '/3/cancel', { resy_token: resyToken });
   }
 
   async verifyAuth(): Promise<boolean> {

@@ -167,14 +167,14 @@ export class ResyClient {
                 name: res.venue.name,
                 location: res.venue.location?.name || '',
             },
-            date: res.reservation.day,
-            time: res.reservation.time_slot,
-            partySize: res.reservation.num_seats,
-            status: res.status,
+            date: res.day,
+            time: res.time_slot,
+            partySize: res.num_seats,
+            status: res.status || 'confirmed',
         }));
     }
     async cancelReservation(resyToken) {
-        await this.request('delete', '/3/book', { resy_token: resyToken });
+        await this.request('post', '/3/cancel', { resy_token: resyToken });
     }
     async verifyAuth() {
         try {
