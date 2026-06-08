@@ -3,7 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock impit
 const mockFetch = vi.fn();
 vi.mock('impit', () => ({
-  Impit: vi.fn().mockImplementation(() => ({ fetch: mockFetch })),
+  // Use a regular function (not an arrow) so vitest 4 can invoke it with `new`
+  // when the client does `new Impit(...)`; the returned object becomes the instance.
+  Impit: vi.fn(function () {
+    return { fetch: mockFetch };
+  }),
   Browser: { Chrome: 'chrome' },
 }));
 
