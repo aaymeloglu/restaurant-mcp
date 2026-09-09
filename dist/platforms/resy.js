@@ -2,7 +2,7 @@
  * Resy platform client implementing PlatformClient interface
  */
 import axios, { AxiosError } from 'axios';
-import { getCredential, setCredential } from '../credentials.js';
+import { getCredential, getStoredCredential, setCredential } from '../credentials.js';
 import { BasePlatformClient } from './base.js';
 import { cache, CacheKeys, CacheTTL } from '../services/cache.js';
 import { rateLimiter } from '../services/rate-limiter.js';
@@ -24,7 +24,11 @@ export class ResyPlatformClient extends BasePlatformClient {
             this.apiKey = await getCredential('resy-api-key');
         }
         if (!this.authToken) {
-            this.authToken = await getCredential('resy-auth-token');
+            // Prefer the stored token: it is only written by a successful login/refresh,
+            // whereas an env var (e.g. from the MCP client config) can go stale and would
+            // otherwise force a password login on every server start.
+            this.authToken = (await getStoredCredential('resy-auth-token'))
+                ?? await getCredential('resy-auth-token');
         }
         if (!this.apiKey) {
             throw new Error('Resy API key not configured. Use set_credentials tool first.');
@@ -60,7 +64,9 @@ export class ResyPlatformClient extends BasePlatformClient {
             await setCredential('resy-auth-token', this.authToken);
             return true;
         }
-        catch {
+        catch (error) {
+            const status = error?.response?.status;
+            console.error(`Resy token refresh failed${status ? ` (HTTP ${status})` : ''}:`, error instanceof Error ? error.message : error);
             return false;
         }
     }
@@ -88,7 +94,7 @@ export class ResyPlatformClient extends BasePlatformClient {
         catch (error) {
             // Handle both 401 and 419 as auth errors
             if (error instanceof AxiosError && (error.response?.status === 401 || error.response?.status === 419) && retry) {
-                console.log(`Resy auth error (${error.response?.status}), attempting token refresh...`);
+                console.error(`Resy auth error (${error.response?.status}), attempting token refresh...`);
                 const refreshed = await this.refreshToken();
                 if (refreshed) {
                     return this.request(method, url, data, false);
@@ -314,21 +320,6 @@ export class ResyPlatformClient extends BasePlatformClient {
             };
         }
     }
-    async getBookToken(configToken, date, partySize) {
-        const details = await this.request('get', '/3/details', {
-            config_id: configToken,
-            day: date,
-            party_size: partySize,
-        });
-        return {
-            bookToken: details.book_token.value,
-            expires: details.book_token.date_expires,
-            paymentMethods: (details.user.payment_methods || []).map((p) => ({
-                id: p.id,
-                isDefault: p.is_default,
-            })),
-        };
-    }
     async isAvailable() {
         // Check cache
         const cacheKey = CacheKeys.health(this.name);
@@ -366,6 +357,41 @@ export class ResyPlatformClient extends BasePlatformClient {
             return false;
         }
     }
+    /**
+     * Get book token and payment methods for a slot.
+     * @param configToken The rgs:// config token string from a slot
+     * @param date Date in YYYY-MM-DD format
+     * @param partySize Number of guests
+     */
+    async getBookToken(configToken, date, partySize) {
+        const details = await this.request('get', '/3/details', {
+            config_id: configToken,
+            day: date,
+            party_size: partySize,
+        });
+        return {
+            bookToken: details.book_token.value,
+            expires: details.book_token.date_expires,
+            paymentMethods: (details.user.payment_methods || []).map((p) => ({
+                id: p.id,
+                isDefault: p.is_default,
+            })),
+        };
+    }
+    /**
+     * Book a slot using a book token from getBookToken().
+     * @param bookToken The book_token value from /3/details
+     * @param paymentMethodId Optional payment method ID; falls back to the account default
+     */
+    async bookWithToken(bookToken, paymentMethodId) {
+        const bookData = { book_token: bookToken };
+        if (paymentMethodId !== undefined) {
+            bookData.struct_payment_method = JSON.stringify({ id: paymentMethodId });
+        }
+        const result = await this.request('post', '/3/book', bookData);
+        cache.invalidate(`availability:${this.name}:*`);
+        return result;
+    }
     // Login method for credential management
     async login(email, password) {
         await this.ensureCredentials();
@@ -379,17 +405,23 @@ export class ResyPlatformClient extends BasePlatformClient {
     // Get user's reservations
     async getReservations() {
         const data = await this.request('get', '/3/user/reservations');
-        return (data.reservations || []).map((res) => ({
-            reservationId: res.resy_token,
-            venue: {
-                name: res.venue.name,
-                location: res.venue.location?.name || '',
-            },
-            date: res.reservation.day,
-            time: res.reservation.time_slot,
-            partySize: res.reservation.num_seats,
-            status: res.status,
-        }));
+        const venues = data.venues || {};
+        return (data.reservations || []).map((res) => {
+            const venue = res.venue?.id !== undefined ? venues[String(res.venue.id)] : undefined;
+            const loc = venue?.location;
+            const location = [loc?.neighborhood, loc?.locality, loc?.region].filter(Boolean).join(', ');
+            const status = res.status?.no_show ? 'no_show' : res.status?.finished ? 'finished' : 'upcoming';
+            return {
+                reservationId: res.resy_token,
+                reservationNumber: res.reservation_id,
+                venue: { name: venue?.name || '', location },
+                date: res.day,
+                time: (res.time_slot || '').slice(0, 5),
+                partySize: res.num_seats,
+                status,
+                cancellable: res.cancellation?.allowed === true,
+            };
+        });
     }
     // Cancel a reservation
     async cancelReservation(resyToken) {
