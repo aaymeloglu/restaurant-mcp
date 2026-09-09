@@ -20,7 +20,10 @@ export type CredentialKey =
   | 'resy-password'
   | 'opentable-token'
   | 'opentable-auth-cookie'
-  | 'opentable-phone';
+  | 'opentable-phone'
+  | 'opentable-cookies'
+  | 'opentable-csrf'
+  | 'opentable-hashes';
 
 interface CredentialStore {
   [key: string]: string;
@@ -68,6 +71,11 @@ const ENV_VAR_MAP: Record<CredentialKey, string> = {
   'resy-email': 'RESY_EMAIL',
   'resy-password': 'RESY_PASSWORD',
   'opentable-token': 'OPENTABLE_TOKEN',
+  'opentable-auth-cookie': 'OPENTABLE_AUTH_COOKIE',
+  'opentable-phone': 'OPENTABLE_PHONE',
+  'opentable-cookies': 'OPENTABLE_COOKIES',
+  'opentable-csrf': 'OPENTABLE_CSRF',
+  'opentable-hashes': 'OPENTABLE_HASHES',
 };
 
 export async function getCredential(key: CredentialKey): Promise<string | null> {
@@ -78,6 +86,16 @@ export async function getCredential(key: CredentialKey): Promise<string | null> 
   }
 
   // Fall back to encrypted file storage
+  const store = await loadCredentials();
+  return store[key] || null;
+}
+
+/**
+ * Read a credential from the encrypted store only, ignoring environment variables.
+ * Used for values the server itself refreshes (e.g. Resy auth tokens), where a
+ * stale env var must not shadow the newer stored value.
+ */
+export async function getStoredCredential(key: CredentialKey): Promise<string | null> {
   const store = await loadCredentials();
   return store[key] || null;
 }
@@ -125,6 +143,7 @@ export interface AuthStatus {
   hasAuthToken: boolean;
   hasLogin: boolean;
   email?: string;
+  phone?: string;
 }
 
 export async function getResyAuthStatus(): Promise<AuthStatus> {
@@ -145,12 +164,16 @@ export async function getResyAuthStatus(): Promise<AuthStatus> {
 }
 
 export async function getOpenTableAuthStatus(): Promise<AuthStatus> {
-  const token = await getCredential('opentable-token');
+  const [authCookie, phone] = await Promise.all([
+    getCredential('opentable-auth-cookie'),
+    getCredential('opentable-phone'),
+  ]);
 
   return {
     platform: 'opentable',
     hasApiKey: false,
-    hasAuthToken: !!token,
-    hasLogin: false,
+    hasAuthToken: !!authCookie,
+    hasLogin: !!phone,
+    phone: phone ? maskCredential(phone) : undefined,
   };
 }

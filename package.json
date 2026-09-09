@@ -5,12 +5,13 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "echo 'dist pre-compiled'",
-    "build:local": "tsc",
+    "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build"
   },
   "keywords": [
     "mcp",
@@ -38,5 +39,8 @@
   },
   "devDependencies": {
     "vitest": "^4.1.0"
+  },
+  "bin": {
+    "restaurant-mcp": "dist/index.js"
   }
 }

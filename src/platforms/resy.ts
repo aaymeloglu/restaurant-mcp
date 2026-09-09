@@ -3,7 +3,7 @@
  */
 
 import axios, { AxiosInstance, AxiosError } from 'axios';
-import { getCredential, setCredential } from '../credentials.js';
+import { getCredential, getStoredCredential, setCredential } from '../credentials.js';
 import { BasePlatformClient } from './base.js';
 import type {
   PlatformName,
@@ -63,7 +63,7 @@ interface ResyBookDetailsResponse {
   user: { payment_methods: Array<{ id: number; is_default: boolean }> };
 }
 
-interface ResyBookResponse {
+export interface ResyBookResponse {
   resy_token: string;
   reservation_id: number;
 }
@@ -95,7 +95,11 @@ export class ResyPlatformClient extends BasePlatformClient {
       this.apiKey = await getCredential('resy-api-key');
     }
     if (!this.authToken) {
-      this.authToken = await getCredential('resy-auth-token');
+      // Prefer the stored token: it is only written by a successful login/refresh,
+      // whereas an env var (e.g. from the MCP client config) can go stale and would
+      // otherwise force a password login on every server start.
+      this.authToken = (await getStoredCredential('resy-auth-token'))
+        ?? await getCredential('resy-auth-token');
     }
     if (!this.apiKey) {
       throw new Error('Resy API key not configured. Use set_credentials tool first.');
@@ -139,7 +143,9 @@ export class ResyPlatformClient extends BasePlatformClient {
       this.authToken = response.data.token;
       await setCredential('resy-auth-token', this.authToken);
       return true;
-    } catch {
+    } catch (error) {
+      const status = (error as { response?: { status?: number } })?.response?.status;
+      console.error(`Resy token refresh failed${status ? ` (HTTP ${status})` : ''}:`, error instanceof Error ? error.message : error);
       return false;
     }
   }
@@ -174,7 +180,7 @@ export class ResyPlatformClient extends BasePlatformClient {
     } catch (error) {
       // Handle both 401 and 419 as auth errors
       if (error instanceof AxiosError && (error.response?.status === 401 || error.response?.status === 419) && retry) {
-        console.log(`Resy auth error (${error.response?.status}), attempting token refresh...`);
+        console.error(`Resy auth error (${error.response?.status}), attempting token refresh...`);
         const refreshed = await this.refreshToken();
         if (refreshed) {
           return this.request<T>(method, url, data, false);
@@ -487,6 +493,21 @@ export class ResyPlatformClient extends BasePlatformClient {
     };
   }
 
+  /**
+   * Book a slot using a book token from getBookToken().
+   * @param bookToken The book_token value from /3/details
+   * @param paymentMethodId Optional payment method ID; falls back to the account default
+   */
+  async bookWithToken(bookToken: string, paymentMethodId?: number): Promise<ResyBookResponse> {
+    const bookData: Record<string, string> = { book_token: bookToken };
+    if (paymentMethodId !== undefined) {
+      bookData.struct_payment_method = JSON.stringify({ id: paymentMethodId });
+    }
+    const result = await this.request<ResyBookResponse>('post', '/3/book', bookData);
+    cache.invalidate(`availability:${this.name}:*`);
+    return result;
+  }
+
   // Login method for credential management
   async login(email: string, password: string): Promise<ResyLoginResponse> {
     await this.ensureCredentials();
@@ -508,35 +529,54 @@ export class ResyPlatformClient extends BasePlatformClient {
   // Get user's reservations
   async getReservations(): Promise<Array<{
     reservationId: string;
+    reservationNumber: number;
     venue: { name: string; location: string };
     date: string;
     time: string;
     partySize: number;
-    status: string;
+    status: 'upcoming' | 'finished' | 'no_show';
+    cancellable: boolean;
   }>> {
+    // /3/user/reservations returns reservations flat (day/time_slot/num_seats at the
+    // top level) plus a separate `venues` map keyed by venue ID.
     interface ReservationsResponse {
-      reservations: Array<{
+      reservations?: Array<{
         resy_token: string;
-        venue: { name: string; location: { name: string } };
-        reservation: { day: string; time_slot: string; num_seats: number };
-        status: string;
+        reservation_id: number;
+        day: string;
+        time_slot: string;
+        num_seats: number;
+        status?: { finished?: number; no_show?: number };
+        venue?: { id?: number };
+        cancellation?: { allowed?: boolean };
+      }>;
+      venues?: Record<string, {
+        name?: string;
+        location?: { locality?: string; region?: string; neighborhood?: string };
       }>;
     }
 
     const data = await this.request<ReservationsResponse>('get', '/3/user/reservations');
+    const venues = data.venues || {};
 
-    return (data.reservations || []).map((res) => ({
-      reservationId: res.resy_token,
-      venue: {
-        name: res.venue.name,
-        location: res.venue.location?.name || '',
-      },
-      date: res.reservation.day,
-      time: res.reservation.time_slot,
-      partySize: res.reservation.num_seats,
-      status: res.status,
-    }));
+    return (data.reservations || []).map((res) => {
+      const venue = res.venue?.id !== undefined ? venues[String(res.venue.id)] : undefined;
+      const loc = venue?.location;
+      const location = [loc?.neighborhood, loc?.locality, loc?.region].filter(Boolean).join(', ');
+      const status = res.status?.no_show ? 'no_show' : res.status?.finished ? 'finished' : 'upcoming';
+      return {
+        reservationId: res.resy_token,
+        reservationNumber: res.reservation_id,
+        venue: { name: venue?.name || '', location },
+        date: res.day,
+        time: (res.time_slot || '').slice(0, 5),
+        partySize: res.num_seats,
+        status,
+        cancellable: res.cancellation?.allowed === true,
+      };
+    });
   }
+
 
   // Cancel a reservation
   async cancelReservation(resyToken: string): Promise<void> {

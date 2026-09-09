@@ -165,11 +165,12 @@ Searches, checks availability, and books the best matching slot in one call.
 
 ## Architecture
 
-- `dist/index.js` -- Single entry point (stdio transport). Hand-maintained, not compiled from TypeScript.
-- `dist/platforms/resy.js` -- Resy client: search, availability, booking via unofficial REST API (axios)
-- `dist/platforms/opentable.js` -- OpenTable client: search, availability, booking via GraphQL persisted queries ([impit](https://github.com/apify/impit) for TLS fingerprint spoofing)
-- `dist/platforms/tock.js` -- Stub (Tock has no public API)
-- `src/` -- TypeScript source (reference; not auto-compiled to dist)
+- `src/index.ts` -- Single entry point (stdio transport). Registers all tools with the MCP SDK's `registerTool` (titles, annotations, `isError` on failures).
+- `src/platforms/resy.ts` -- Resy client: search, availability, booking via unofficial REST API (axios)
+- `src/platforms/opentable.ts` -- OpenTable client: search, availability, booking via GraphQL persisted queries ([impit](https://github.com/apify/impit) for TLS fingerprint spoofing)
+- `src/platforms/tock.ts` -- Stub (Tock has no public API)
+- `src/sniper/` -- Scheduled booking attempts (SQLite-backed)
+- `dist/` -- Compiled output, checked in so the server runs without a build step. Regenerate with `npm run build`; `npm test` builds first.
 
 ## Security
 

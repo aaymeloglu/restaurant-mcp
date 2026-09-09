@@ -1,26 +1,15 @@
-import { z } from 'zod';
+import { z } from 'zod/v4';
 export declare const snipeReservationSchema: z.ZodObject<{
     restaurant_id: z.ZodString;
-    platform: z.ZodEnum<["resy", "opentable"]>;
+    platform: z.ZodEnum<{
+        resy: "resy";
+        opentable: "opentable";
+    }>;
     date: z.ZodString;
     party_size: z.ZodNumber;
-    preferred_times: z.ZodArray<z.ZodString, "many">;
+    preferred_times: z.ZodArray<z.ZodString>;
     release_time: z.ZodString;
-}, "strip", z.ZodTypeAny, {
-    platform: "resy" | "opentable";
-    party_size: number;
-    date: string;
-    restaurant_id: string;
-    preferred_times: string[];
-    release_time: string;
-}, {
-    platform: "resy" | "opentable";
-    party_size: number;
-    date: string;
-    restaurant_id: string;
-    preferred_times: string[];
-    release_time: string;
-}>;
+}, z.core.$strip>;
 export type SnipeReservationInput = z.infer<typeof snipeReservationSchema>;
 export interface SnipeResult {
     success: boolean;
@@ -29,7 +18,7 @@ export interface SnipeResult {
     scheduledFor: string;
 }
 export declare function snipeReservation(input: SnipeReservationInput): Promise<SnipeResult>;
-export declare const listSnipesSchema: z.ZodObject<{}, "strip", z.ZodTypeAny, {}, {}>;
+export declare const listSnipesSchema: z.ZodObject<{}, z.core.$strip>;
 export type ListSnipesInput = z.infer<typeof listSnipesSchema>;
 export interface SnipeSummary {
     id: string;
@@ -46,11 +35,7 @@ export interface SnipeSummary {
 export declare function listScheduledSnipes(_input: ListSnipesInput): Promise<SnipeSummary[]>;
 export declare const cancelSnipeSchema: z.ZodObject<{
     snipe_id: z.ZodString;
-}, "strip", z.ZodTypeAny, {
-    snipe_id: string;
-}, {
-    snipe_id: string;
-}>;
+}, z.core.$strip>;
 export type CancelSnipeInput = z.infer<typeof cancelSnipeSchema>;
 export interface CancelSnipeResult {
     success: boolean;

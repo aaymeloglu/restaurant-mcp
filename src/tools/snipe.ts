@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/v4';
 import { createSnipe, listSnipes, deleteSnipe, getSnipe, updateSnipeStatus, type SnipeConfig } from '../sniper/store.js';
 import { scheduleSnipeJob, cancelSnipeJob, isSnipeScheduled } from '../sniper/scheduler.js';
 

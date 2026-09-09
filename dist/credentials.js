@@ -61,6 +61,15 @@ export async function getCredential(key) {
     const store = await loadCredentials();
     return store[key] || null;
 }
+/**
+ * Read a credential from the encrypted store only, ignoring environment variables.
+ * Used for values the server itself refreshes (e.g. Resy auth tokens), where a
+ * stale env var must not shadow the newer stored value.
+ */
+export async function getStoredCredential(key) {
+    const store = await loadCredentials();
+    return store[key] || null;
+}
 export async function setCredential(key, value) {
     const store = await loadCredentials();
     store[key] = value;
