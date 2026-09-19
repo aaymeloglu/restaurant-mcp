@@ -82,7 +82,7 @@ const setOpenTableSessionSchema = z.object({
     auth_cookie: z.string().optional().describe('authCke cookie value from OpenTable login (for booking, not needed for search/availability)'),
 });
 const cancelReservationSchema = z.object({
-    reservation_id: z.string().min(1).describe('Reservation ID/token to cancel'),
+    reservation_id: z.string().min(1).describe('Resy reservation to cancel: either the cancelToken/resy_token or the numeric confirmation number from make_reservation or list_reservations'),
     platform: z.enum(['resy']).describe('Platform (currently only Resy supported)'),
 });
 const setCredentialsSchema = z.object({
@@ -185,6 +185,7 @@ export function registerTools(server) {
                 success: true,
                 platform: 'resy',
                 reservationId: String(bookResult.reservation_id),
+                cancelToken: bookResult.resy_token,
                 confirmationDetails: `Reservation confirmed! ID: ${bookResult.reservation_id}`,
             });
         }
@@ -203,7 +204,7 @@ export function registerTools(server) {
     }, async () => text(await resyClient.getReservations()));
     server.registerTool('cancel_reservation', {
         title: 'Cancel reservation',
-        description: 'Cancel an existing reservation.',
+        description: 'Cancel an existing Resy reservation. Pass either the numeric confirmation number (reservationId from make_reservation) or the resy_token (cancelToken / list_reservations reservationId).',
         inputSchema: cancelReservationSchema.shape,
         annotations: CANCEL_REMOTE,
     }, async (input) => {

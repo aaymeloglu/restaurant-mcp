@@ -72,3 +72,35 @@ describe('ResyPlatformClient.getReservations', () => {
     expect(await resyClient.getReservations()).toEqual([]);
   });
 });
+
+describe('ResyPlatformClient.cancelReservation', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function mockRequest() {
+    return vi.spyOn(resyClient, 'request').mockImplementation(async (method, url) => {
+      if (method === 'get' && url === '/3/user/reservations') return sample;
+      if (method === 'post' && url === '/3/cancel') return {};
+      throw new Error(`unexpected request ${method} ${url}`);
+    });
+  }
+
+  it('POSTs the resy_token to /3/cancel', async () => {
+    const request = mockRequest();
+    await resyClient.cancelReservation('tok-2');
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith('post', '/3/cancel', { resy_token: 'tok-2' });
+  });
+
+  it('resolves a numeric confirmation number to its resy_token first', async () => {
+    const request = mockRequest();
+    await resyClient.cancelReservation('999');
+    expect(request).toHaveBeenNthCalledWith(1, 'get', '/3/user/reservations');
+    expect(request).toHaveBeenNthCalledWith(2, 'post', '/3/cancel', { resy_token: 'tok-2' });
+  });
+
+  it('throws a clear error for an unknown confirmation number', async () => {
+    const request = mockRequest();
+    await expect(resyClient.cancelReservation('424242')).rejects.toThrow(/424242/);
+    expect(request).not.toHaveBeenCalledWith('post', '/3/cancel', expect.anything());
+  });
+});
