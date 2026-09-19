@@ -578,9 +578,22 @@ export class ResyPlatformClient extends BasePlatformClient {
   }
 
 
-  // Cancel a reservation
-  async cancelReservation(resyToken: string): Promise<void> {
-    await this.request<void>('delete', '/3/book', { resy_token: resyToken });
+  // Cancel a reservation. Resy cancels via POST /3/cancel with the reservation's
+  // resy_token (DELETE /3/book returns 405). Accepts either the resy_token or the
+  // numeric confirmation number returned by make_reservation, resolving the latter
+  // through the user's reservation list.
+  async cancelReservation(idOrToken: string): Promise<void> {
+    let resyToken = idOrToken;
+    if (/^\d+$/.test(idOrToken)) {
+      const match = (await this.getReservations()).find(
+        (r) => String(r.reservationNumber) === idOrToken
+      );
+      if (!match) {
+        throw new Error(`No Resy reservation found with confirmation number ${idOrToken}.`);
+      }
+      resyToken = match.reservationId;
+    }
+    await this.request<void>('post', '/3/cancel', { resy_token: resyToken });
   }
 
   // Helper methods

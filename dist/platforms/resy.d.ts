@@ -66,7 +66,7 @@ export declare class ResyPlatformClient extends BasePlatformClient {
         status: 'upcoming' | 'finished' | 'no_show';
         cancellable: boolean;
     }>>;
-    cancelReservation(resyToken: string): Promise<void>;
+    cancelReservation(idOrToken: string): Promise<void>;
     private mapToRestaurant;
     private mapToTimeSlot;
 }
