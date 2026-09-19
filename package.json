@@ -38,7 +38,7 @@
     "zod": "^3.22.0"
   },
   "devDependencies": {
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.11"
   },
   "bin": {
     "restaurant-mcp": "dist/index.js"
