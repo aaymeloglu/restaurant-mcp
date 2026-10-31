@@ -380,7 +380,7 @@ DEFAULTS: partySize=2, preferredTimes=["7:00 PM", "7:30 PM", "8:00 PM"], platfor
       const message = error instanceof Error ? error.message : 'Unknown error';
 
       if (error instanceof z.ZodError) {
-        const issues = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
+        const issues = error.issues.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
         return {
           content: [{ type: 'text', text: `Invalid input: ${issues}` }],
           isError: true,
@@ -408,7 +408,7 @@ app.use((_req, res, next) => {
   next();
 });
 
-app.options('*', (_req, res) => {
+app.options('/{*splat}', (_req, res) => {
   res.status(200).end();
 });
 
@@ -486,7 +486,12 @@ async function main() {
 
   await loadPendingSnipes();
 
-  app.listen(PORT, () => {
+  // Express 5 calls this with the error if the bind fails (e.g. EADDRINUSE)
+  app.listen(PORT, (error?: Error) => {
+    if (error) {
+      console.error(`[MCP Sniper] Failed to listen on port ${PORT}:`, error.message);
+      process.exit(1);
+    }
     console.log(`[MCP Sniper] Listening on port ${PORT}`);
     console.log('[MCP Sniper] MCP endpoint: /mcp');
   });
