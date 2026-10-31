@@ -6,7 +6,17 @@ import { getCredential, getStoredCredential, setCredential } from '../credential
 import { BasePlatformClient } from './base.js';
 import { cache, CacheKeys, CacheTTL } from '../services/cache.js';
 import { rateLimiter } from '../services/rate-limiter.js';
+import { fuzzyMatch } from '../utils/fuzzy.js';
+import { normalizeName } from '../utils/normalize.js';
 const BASE_URL = 'https://api.resy.com';
+// ~22 miles: covers a metro area without pulling in other cities
+const SEARCH_RADIUS_METERS = 35000;
+const MIN_NAME_SCORE = 0.3;
+function matchesName(query, venueName) {
+    if (!query?.trim())
+        return true;
+    return fuzzyMatch(normalizeName(query), normalizeName(venueName)).score >= MIN_NAME_SCORE;
+}
 export class ResyPlatformClient extends BasePlatformClient {
     name = 'resy';
     client;
@@ -110,20 +120,23 @@ export class ResyPlatformClient extends BasePlatformClient {
         const coords = this.getCityCoordinates(query.location);
         console.error(`Resy search: "${query.query}" in "${query.location}"`);
         try {
-            const findData = await this.client.get('/4/find', {
-                headers: this.getHeaders(),
-                params: {
-                    lat: coords.lat,
-                    long: coords.lng,
-                    day: date,
-                    party_size: partySize,
-                    query: query.query,
-                },
-                timeout: 30000,
-            });
-            const venues = findData.data?.results?.venues || [];
-            console.error(`Resy search found ${venues.length} results`);
-            return venues.map((entry) => this.mapToRestaurant(entry.venue));
+            await this.ensureCredentials();
+            // /4/find ignores `query` and returns every bookable venue near the coordinates,
+            // so name search goes through venuesearch (what resy.com's search box uses).
+            // The radius keeps results in the requested city; without it the index is global.
+            const response = await this.client.post('/3/venuesearch/search', {
+                geo: { latitude: coords.lat, longitude: coords.lng, radius: SEARCH_RADIUS_METERS },
+                query: query.query,
+                types: ['venue'],
+                per_page: 20,
+                slot_filter: { day: date, party_size: partySize },
+            }, { headers: { ...this.getHeaders(), 'Content-Type': 'application/json' }, timeout: 30000 });
+            const hits = response.data?.search?.hits || [];
+            // venuesearch is typo-tolerant and also matches non-name fields, so it can return
+            // venues whose names have nothing to do with the query. Keep only name matches.
+            const matches = hits.filter((hit) => matchesName(query.query, hit.name));
+            console.error(`Resy search found ${matches.length} matching of ${hits.length} results`);
+            return matches.map((hit) => this.mapSearchHit(hit));
         }
         catch (error) {
             console.error('Resy search error:', error instanceof Error ? error.message : error);
@@ -439,19 +452,20 @@ export class ResyPlatformClient extends BasePlatformClient {
         await this.request('post', '/3/cancel', { resy_token: resyToken });
     }
     // Helper methods
-    mapToRestaurant(hit) {
+    mapSearchHit(hit) {
         return {
             id: this.createId(hit.id.resy),
             platform: this.name,
             platformId: hit.id.resy,
             name: hit.name,
-            location: hit.location?.name || '',
-            neighborhood: hit.location?.neighborhood,
-            cuisine: '',
-            cuisines: [],
-            priceRange: hit.price_range || 0,
-            rating: hit.rating || 0,
-            imageUrl: undefined,
+            location: [hit.locality, hit.region].filter(Boolean).join(', ') || hit.location?.name || '',
+            neighborhood: hit.neighborhood,
+            cuisine: hit.cuisine?.[0] || '',
+            cuisines: hit.cuisine || [],
+            priceRange: hit.price_range_id || 0,
+            rating: hit.rating?.average || 0,
+            reviewCount: hit.rating?.count,
+            imageUrl: hit.images?.[0],
         };
     }
     mapToTimeSlot(slot) {

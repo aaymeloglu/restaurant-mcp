@@ -67,7 +67,7 @@ export declare class ResyPlatformClient extends BasePlatformClient {
         cancellable: boolean;
     }>>;
     cancelReservation(idOrToken: string): Promise<void>;
-    private mapToRestaurant;
+    private mapSearchHit;
     private mapToTimeSlot;
 }
 export declare const resyClient: ResyPlatformClient;
