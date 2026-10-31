@@ -486,7 +486,12 @@ async function main() {
 
   await loadPendingSnipes();
 
-  app.listen(PORT, () => {
+  // Express 5 calls this with the error if the bind fails (e.g. EADDRINUSE)
+  app.listen(PORT, (error?: Error) => {
+    if (error) {
+      console.error(`[MCP Sniper] Failed to listen on port ${PORT}:`, error.message);
+      process.exit(1);
+    }
     console.log(`[MCP Sniper] Listening on port ${PORT}`);
     console.log('[MCP Sniper] MCP endpoint: /mcp');
   });
