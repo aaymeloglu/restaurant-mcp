@@ -1,9 +1,5 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import { Server, type ListToolsResult } from '@modelcontextprotocol/server';
 import express from 'express';
 import { z } from 'zod';
 import { createSnipe, listSnipes, getSnipe, updateSnipe, deleteSnipe } from './store.js';
@@ -126,7 +122,7 @@ function createServer(): Server {
   );
 
   // List tools
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  server.setRequestHandler('tools/list', async (): Promise<ListToolsResult> => ({
     tools: [
       {
         name: 'create_snipe',
@@ -215,7 +211,7 @@ DEFAULTS: partySize=2, preferredTimes=["7:00 PM", "7:30 PM", "8:00 PM"], platfor
   }));
 
   // Handle tool calls
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler('tools/call', async (request) => {
     const { name, arguments: args } = request.params;
 
     try {
@@ -402,7 +398,7 @@ DEFAULTS: partySize=2, preferredTimes=["7:00 PM", "7:30 PM", "8:00 PM"], platfor
 }
 
 // Store active sessions
-const sessions = new Map<string, { server: Server; transport: StreamableHTTPServerTransport }>();
+const sessions = new Map<string, { server: Server; transport: NodeStreamableHTTPServerTransport }>();
 
 // Enable CORS for all routes
 app.use((_req, res, next) => {
@@ -456,7 +452,7 @@ app.all('/mcp', express.json(), async (req, res) => {
     if (!sessionId || !sessions.has(sessionId)) {
       sessionId = randomUUID();
       const server = createServer();
-      const transport = new StreamableHTTPServerTransport({
+      const transport = new NodeStreamableHTTPServerTransport({
         sessionIdGenerator: () => sessionId,
       });
       sessions.set(sessionId, { server, transport });

@@ -4,8 +4,8 @@
  * search, availability, booking and reservation sniping.
  */
 import { createRequire } from 'module';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
+import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod/v4';
 import { setCredential, getCredential, getResyAuthStatus, getOpenTableAuthStatus, } from './credentials.js';
 import { resyClient } from './platforms/resy.js';
@@ -108,7 +108,7 @@ export function registerTools(server) {
     server.registerTool('find_table', {
         title: 'Find a table',
         description: 'Find and optionally book a table. One-shot: searches, checks availability, and books.',
-        inputSchema: findTableSchema.shape,
+        inputSchema: findTableSchema,
         annotations: BOOK_REMOTE,
     }, async (input) => {
         const result = await findTable(input.restaurant, input.location, input.date, input.time, input.party_size, input.book);
@@ -117,7 +117,7 @@ export function registerTools(server) {
     server.registerTool('search_restaurants', {
         title: 'Search restaurants',
         description: 'Search for restaurants by name across Resy, OpenTable, and Tock.',
-        inputSchema: searchRestaurantSchema.shape,
+        inputSchema: searchRestaurantSchema,
         annotations: READ_REMOTE,
     }, async (input) => {
         const results = await searchRestaurant(input.name, input.location, input.date, input.party_size);
@@ -126,19 +126,19 @@ export function registerTools(server) {
     server.registerTool('get_restaurant', {
         title: 'Get restaurant',
         description: 'Get details for a specific restaurant by ID.',
-        inputSchema: getRestaurantSchema.shape,
+        inputSchema: getRestaurantSchema,
         annotations: READ_REMOTE,
     }, async (input) => text(await getRestaurantById(input.restaurant_id)));
     server.registerTool('get_restaurants', {
         title: 'Get restaurants',
         description: 'Get details for multiple restaurants by ID.',
-        inputSchema: getRestaurantsSchema.shape,
+        inputSchema: getRestaurantsSchema,
         annotations: READ_REMOTE,
     }, async (input) => text(await getRestaurantsByIds(input.restaurant_ids)));
     server.registerTool('check_availability', {
         title: 'Check availability',
         description: 'Check available time slots for a restaurant.',
-        inputSchema: checkAvailabilitySchema.shape,
+        inputSchema: checkAvailabilitySchema,
         annotations: READ_REMOTE,
     }, async (input) => {
         const results = await checkAvailability(input.restaurant_id, input.date, input.party_size);
@@ -147,7 +147,7 @@ export function registerTools(server) {
     server.registerTool('get_booking_options', {
         title: 'Get booking options',
         description: 'Get book token and payment methods for a time slot. Call this before make_reservation.',
-        inputSchema: getBookingOptionsSchema.shape,
+        inputSchema: getBookingOptionsSchema,
         annotations: READ_REMOTE,
     }, async (input) => {
         try {
@@ -161,7 +161,7 @@ export function registerTools(server) {
     server.registerTool('make_reservation', {
         title: 'Make reservation',
         description: 'Book a reservation. Provide the slot_token from check_availability. For Resy: handles book token flow automatically. For OpenTable: requires platform="opentable", restaurant_id, and slot_availability_token.',
-        inputSchema: makeReservationSchema.shape,
+        inputSchema: makeReservationSchema,
         annotations: BOOK_REMOTE,
     }, async (input) => {
         try {
@@ -205,7 +205,7 @@ export function registerTools(server) {
     server.registerTool('cancel_reservation', {
         title: 'Cancel reservation',
         description: 'Cancel an existing Resy reservation. Pass either the numeric confirmation number (reservationId from make_reservation) or the resy_token (cancelToken / list_reservations reservationId).',
-        inputSchema: cancelReservationSchema.shape,
+        inputSchema: cancelReservationSchema,
         annotations: CANCEL_REMOTE,
     }, async (input) => {
         if (input.platform === 'resy') {
@@ -217,7 +217,7 @@ export function registerTools(server) {
     server.registerTool('set_credentials', {
         title: 'Set credentials',
         description: 'Securely store API credentials.',
-        inputSchema: setCredentialsSchema.shape,
+        inputSchema: setCredentialsSchema,
         annotations: WRITE_LOCAL,
     }, async (input) => {
         const stored = [];
@@ -240,7 +240,7 @@ export function registerTools(server) {
     server.registerTool('set_login', {
         title: 'Set login',
         description: 'Store email/password for automatic token refresh.',
-        inputSchema: setLoginSchema.shape,
+        inputSchema: setLoginSchema,
         annotations: WRITE_LOCAL,
     }, async (input) => {
         if (input.platform !== 'resy')
@@ -256,7 +256,7 @@ export function registerTools(server) {
     server.registerTool('check_auth_status', {
         title: 'Check auth status',
         description: 'Check if credentials are configured and valid.',
-        inputSchema: checkAuthStatusSchema.shape,
+        inputSchema: checkAuthStatusSchema,
         annotations: READ_REMOTE,
     }, async (input) => {
         const statuses = [];
@@ -277,7 +277,7 @@ export function registerTools(server) {
     server.registerTool('refresh_token', {
         title: 'Refresh token',
         description: 'Manually refresh authentication token.',
-        inputSchema: refreshTokenSchema.shape,
+        inputSchema: refreshTokenSchema,
         annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     }, async (input) => {
         if (input.platform !== 'resy')
@@ -297,7 +297,7 @@ export function registerTools(server) {
     server.registerTool('set_opentable_session', {
         title: 'Set OpenTable session',
         description: 'Inject OpenTable browser session (cookies + CSRF token) for API access. Requires loading opentable.com in Playwright first to solve Akamai bot challenge.',
-        inputSchema: setOpenTableSessionSchema.shape,
+        inputSchema: setOpenTableSessionSchema,
         annotations: WRITE_LOCAL,
     }, async (input) => {
         await openTableClient.setSession(input.cookies, input.csrf_token, input.hashes || null, input.auth_cookie || null);
@@ -313,19 +313,19 @@ export function registerTools(server) {
     server.registerTool('snipe_reservation', {
         title: 'Snipe reservation',
         description: 'Schedule an automatic booking attempt.',
-        inputSchema: snipeReservationSchema.shape,
+        inputSchema: snipeReservationSchema,
         annotations: BOOK_REMOTE,
     }, async (input) => text(await snipeReservation(input)));
     server.registerTool('list_snipes', {
         title: 'List snipes',
         description: 'View all scheduled snipe attempts.',
-        inputSchema: listSnipesSchema.shape,
+        inputSchema: listSnipesSchema,
         annotations: READ_LOCAL,
     }, async (input) => text(await listScheduledSnipes(input)));
     server.registerTool('cancel_snipe', {
         title: 'Cancel snipe',
         description: 'Cancel a scheduled snipe attempt.',
-        inputSchema: cancelSnipeSchema.shape,
+        inputSchema: cancelSnipeSchema,
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     }, async (input) => text(await cancelSnipe(input)));
     server.registerTool('get_platform_status', {
