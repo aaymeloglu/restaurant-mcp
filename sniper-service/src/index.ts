@@ -380,7 +380,7 @@ DEFAULTS: partySize=2, preferredTimes=["7:00 PM", "7:30 PM", "8:00 PM"], platfor
       const message = error instanceof Error ? error.message : 'Unknown error';
 
       if (error instanceof z.ZodError) {
-        const issues = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
+        const issues = error.issues.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
         return {
           content: [{ type: 'text', text: `Invalid input: ${issues}` }],
           isError: true,
@@ -408,7 +408,7 @@ app.use((_req, res, next) => {
   next();
 });
 
-app.options('*', (_req, res) => {
+app.options('/{*splat}', (_req, res) => {
   res.status(200).end();
 });
 
